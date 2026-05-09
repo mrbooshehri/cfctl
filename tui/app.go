@@ -249,9 +249,9 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m AppModel) contentHasForm() bool {
 	switch section(m.sectionIdx) {
 	case sectionDNS:
-		return m.dns.showForm
+		return m.dns.showForm || m.dns.showConfirm
 	case sectionFirewall:
-		return m.fw.showForm
+		return m.fw.showForm || m.fw.showConfirm
 	}
 	return false
 }

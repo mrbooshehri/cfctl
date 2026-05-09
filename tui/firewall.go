@@ -14,21 +14,23 @@ import (
 )
 
 type fwModel struct {
-	client    *api.Client
-	zoneID    string
-	rules     []cf.AccessRule
-	cursor    int
-	offset    int
-	showForm  bool
-	ipInput   textinput.Model
-	modeInput textinput.Model
-	noteInput textinput.Model
-	formFocus int
-	loading   bool
-	err       string
-	statusMsg string
-	width     int
-	height    int
+	client      *api.Client
+	zoneID      string
+	rules       []cf.AccessRule
+	cursor      int
+	offset      int
+	showForm    bool
+	showConfirm bool
+	confirmIdx  int
+	ipInput     textinput.Model
+	modeInput   textinput.Model
+	noteInput   textinput.Model
+	formFocus   int
+	loading     bool
+	err         string
+	statusMsg   string
+	width       int
+	height      int
 }
 
 type fwLoadedMsg struct{ rules []cf.AccessRule }
@@ -109,6 +111,9 @@ func (m fwModel) Update(msg tea.Msg) (fwModel, tea.Cmd) {
 		if m.showForm {
 			return m.updateForm(msg)
 		}
+		if m.showConfirm {
+			return m.updateConfirm(msg)
+		}
 		switch msg.String() {
 		case "j", "down":
 			if m.cursor < len(m.rules)-1 {
@@ -141,16 +146,10 @@ func (m fwModel) Update(msg tea.Msg) (fwModel, tea.Cmd) {
 			m.statusMsg = ""
 		case "d":
 			if len(m.rules) > 0 && m.cursor < len(m.rules) {
-				id := m.rules[m.cursor].ID
-				zoneID := m.zoneID
-				client := m.client
-				m.loading = true
-				return m, func() tea.Msg {
-					if err := client.DeleteAccessRule(context.Background(), zoneID, id); err != nil {
-						return fwErrMsg{err}
-					}
-					return fwOKMsg{"Rule deleted"}
-				}
+				m.showConfirm = true
+				m.confirmIdx = m.cursor
+				m.err = ""
+				m.statusMsg = ""
 			}
 		case "r":
 			m.loading = true
@@ -236,6 +235,9 @@ func (m fwModel) submitForm() (fwModel, tea.Cmd) {
 func (m fwModel) View() string {
 	if m.showForm {
 		return m.formView()
+	}
+	if m.showConfirm {
+		return m.confirmView()
 	}
 
 	var b strings.Builder
@@ -344,6 +346,50 @@ func (m fwModel) formView() string {
 		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n\n")
 	}
 	b.WriteString(styles.Help.Render("[tab/↑↓] move  [enter] next/submit  [esc] cancel"))
+	return b.String()
+}
+
+func (m fwModel) updateConfirm(msg tea.KeyMsg) (fwModel, tea.Cmd) {
+	switch {
+	case msg.String() == "y" || msg.String() == "Y":
+		if m.confirmIdx >= len(m.rules) {
+			m.showConfirm = false
+			return m, nil
+		}
+		id := m.rules[m.confirmIdx].ID
+		zoneID := m.zoneID
+		client := m.client
+		m.showConfirm = false
+		m.loading = true
+		return m, func() tea.Msg {
+			if err := client.DeleteAccessRule(context.Background(), zoneID, id); err != nil {
+				return fwErrMsg{err}
+			}
+			return fwOKMsg{"Rule deleted"}
+		}
+	default:
+		m.showConfirm = false
+	}
+	return m, nil
+}
+
+func (m fwModel) confirmView() string {
+	if m.confirmIdx >= len(m.rules) {
+		return ""
+	}
+	r := m.rules[m.confirmIdx]
+
+	var b strings.Builder
+	b.WriteString(styles.Error.Render("Delete Access Rule?") + "\n\n")
+	b.WriteString(styles.DimItem.Render("  This action cannot be undone.") + "\n\n")
+	b.WriteString("  " + styles.DimItem.Render("Mode:   ") + styles.NormalItem.Render(r.Mode) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("Target: ") + styles.NormalItem.Render(r.Configuration.Target) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("Value:  ") + styles.NormalItem.Render(r.Configuration.Value) + "\n")
+	if r.Notes != "" {
+		b.WriteString("  " + styles.DimItem.Render("Notes:  ") + styles.NormalItem.Render(r.Notes) + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(styles.Error.Render("[y] confirm delete") + "  " + styles.Help.Render("[any other key] cancel"))
 	return b.String()
 }
 

@@ -14,19 +14,21 @@ import (
 )
 
 type dnsModel struct {
-	client    *api.Client
-	zoneID    string
-	records   []cf.DNSRecord
-	cursor    int
-	offset    int
-	form      dnsForm
-	showForm  bool
-	editID    string
-	loading   bool
-	err       string
-	statusMsg string
-	width     int
-	height    int
+	client      *api.Client
+	zoneID      string
+	records     []cf.DNSRecord
+	cursor      int
+	offset      int
+	form        dnsForm
+	showForm    bool
+	editID      string
+	showConfirm bool
+	confirmIdx  int
+	loading     bool
+	err         string
+	statusMsg   string
+	width       int
+	height      int
 }
 
 type dnsForm struct {
@@ -96,6 +98,9 @@ func (m dnsModel) Update(msg tea.Msg) (dnsModel, tea.Cmd) {
 		if m.showForm {
 			return m.updateForm(msg)
 		}
+		if m.showConfirm {
+			return m.updateConfirm(msg)
+		}
 		switch msg.String() {
 		case "j", "down":
 			if m.cursor < len(m.records)-1 {
@@ -130,16 +135,10 @@ func (m dnsModel) Update(msg tea.Msg) (dnsModel, tea.Cmd) {
 			}
 		case "d":
 			if len(m.records) > 0 && m.cursor < len(m.records) {
-				id := m.records[m.cursor].ID
-				zoneID := m.zoneID
-				client := m.client
-				m.loading = true
-				return m, func() tea.Msg {
-					if err := client.DeleteDNSRecord(context.Background(), zoneID, id); err != nil {
-						return dnsErrMsg{err}
-					}
-					return dnsOKMsg{"Record deleted"}
-				}
+				m.showConfirm = true
+				m.confirmIdx = m.cursor
+				m.err = ""
+				m.statusMsg = ""
 			}
 		case "r":
 			m.loading = true
@@ -285,6 +284,9 @@ func (m dnsModel) View() string {
 	if m.showForm {
 		return m.formView()
 	}
+	if m.showConfirm {
+		return m.confirmView()
+	}
 
 	var b strings.Builder
 
@@ -427,6 +429,58 @@ func (m dnsModel) formView() string {
 		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n\n")
 	}
 	b.WriteString(styles.Help.Render("[tab/↑↓] navigate  [space] toggle proxy  [enter] next/submit  [esc] cancel"))
+	return b.String()
+}
+
+func (m dnsModel) updateConfirm(msg tea.KeyMsg) (dnsModel, tea.Cmd) {
+	switch {
+	case msg.String() == "y" || msg.String() == "Y":
+		if m.confirmIdx >= len(m.records) {
+			m.showConfirm = false
+			return m, nil
+		}
+		id := m.records[m.confirmIdx].ID
+		zoneID := m.zoneID
+		client := m.client
+		m.showConfirm = false
+		m.loading = true
+		return m, func() tea.Msg {
+			if err := client.DeleteDNSRecord(context.Background(), zoneID, id); err != nil {
+				return dnsErrMsg{err}
+			}
+			return dnsOKMsg{"Record deleted"}
+		}
+	default:
+		m.showConfirm = false
+	}
+	return m, nil
+}
+
+func (m dnsModel) confirmView() string {
+	if m.confirmIdx >= len(m.records) {
+		return ""
+	}
+	r := m.records[m.confirmIdx]
+
+	ttl := fmt.Sprintf("%d", r.TTL)
+	if r.TTL == 1 {
+		ttl = "Auto"
+	}
+	proxy := "no"
+	if r.Proxied != nil && *r.Proxied {
+		proxy = "yes"
+	}
+
+	var b strings.Builder
+	b.WriteString(styles.Error.Render("Delete DNS Record?") + "\n\n")
+	b.WriteString(styles.DimItem.Render("  This action cannot be undone.") + "\n\n")
+	b.WriteString("  " + styles.DimItem.Render("Type:    ") + styles.NormalItem.Render(r.Type) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("Name:    ") + styles.NormalItem.Render(r.Name) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("Content: ") + styles.NormalItem.Render(r.Content) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("TTL:     ") + styles.NormalItem.Render(ttl) + "\n")
+	b.WriteString("  " + styles.DimItem.Render("Proxied: ") + styles.NormalItem.Render(proxy) + "\n")
+	b.WriteString("\n")
+	b.WriteString(styles.Error.Render("[y] confirm delete") + "  " + styles.Help.Render("[any other key] cancel"))
 	return b.String()
 }
 
