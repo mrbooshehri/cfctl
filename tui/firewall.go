@@ -99,7 +99,7 @@ func (m fwModel) Update(msg tea.Msg) (fwModel, tea.Cmd) {
 
 	case fwErrMsg:
 		m.loading = false
-		m.err = msg.err.Error()
+		m.err = fwErrString(msg.err)
 		return m, nil
 
 	case fwOKMsg:
@@ -391,6 +391,17 @@ func (m fwModel) confirmView() string {
 	b.WriteString("\n")
 	b.WriteString(styles.Error.Render("[y] confirm delete") + "  " + styles.Help.Render("[any other key] cancel"))
 	return b.String()
+}
+
+// fwErrString converts a Cloudflare API error into a human-readable message,
+// catching the common case where the token lacks Firewall Services permission.
+func fwErrString(err error) string {
+	s := err.Error()
+	if strings.Contains(s, "10000") || strings.Contains(s, "Authentication error") {
+		return "Permission denied (10000) — your token needs Zone:Firewall Services:Read.\n" +
+			"  Edit token at dash.cloudflare.com → My Profile → API Tokens"
+	}
+	return s
 }
 
 func (m *fwModel) SetSize(w, h int) {
