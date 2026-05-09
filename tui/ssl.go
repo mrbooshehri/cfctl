@@ -48,7 +48,7 @@ func (m sslModel) Update(msg tea.Msg) (sslModel, tea.Cmd) {
 		return m, nil
 	case sslErrMsg:
 		m.loading = false
-		m.err = msg.err.Error()
+		m.err = sslErrString(msg.err)
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -123,4 +123,13 @@ func (m sslModel) View() string {
 	b.WriteString(styles.Help.Render("[↑/↓] navigate  [r] refresh"))
 
 	return b.String()
+}
+
+func sslErrString(err error) string {
+	s := err.Error()
+	if strings.Contains(s, "9109") || strings.Contains(s, "Unauthorized") {
+		return "Permission denied (9109) — your token needs Zone:SSL and Certificates:Read.\n" +
+			"  Edit token at dash.cloudflare.com → My Profile → API Tokens"
+	}
+	return s
 }
