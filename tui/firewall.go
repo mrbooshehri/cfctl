@@ -1,0 +1,353 @@
+package tui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	cf "github.com/cloudflare/cloudflare-go"
+	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/styles"
+)
+
+type fwModel struct {
+	client    *api.Client
+	zoneID    string
+	rules     []cf.AccessRule
+	cursor    int
+	offset    int
+	showForm  bool
+	ipInput   textinput.Model
+	modeInput textinput.Model
+	noteInput textinput.Model
+	formFocus int
+	loading   bool
+	err       string
+	statusMsg string
+	width     int
+	height    int
+}
+
+type fwLoadedMsg struct{ rules []cf.AccessRule }
+type fwErrMsg struct{ err error }
+type fwOKMsg struct{ msg string }
+
+func newFWModel(client *api.Client, zoneID string) fwModel {
+	ip := textinput.New()
+	ip.Placeholder = "IP / CIDR / country code"
+	ip.Width = 45
+
+	mode := textinput.New()
+	mode.Placeholder = "block / challenge / whitelist / js_challenge"
+	mode.Width = 45
+
+	note := textinput.New()
+	note.Placeholder = "Optional note"
+	note.Width = 45
+
+	return fwModel{
+		client:    client,
+		zoneID:    zoneID,
+		ipInput:   ip,
+		modeInput: mode,
+		noteInput: note,
+	}
+}
+
+func (m fwModel) Init() tea.Cmd { return m.load() }
+
+func (m fwModel) load() tea.Cmd {
+	return func() tea.Msg {
+		rules, err := m.client.ListAccessRules(context.Background(), m.zoneID)
+		if err != nil {
+			return fwErrMsg{err}
+		}
+		return fwLoadedMsg{rules}
+	}
+}
+
+func (m fwModel) visibleHeight() int {
+	h := m.height - 11
+	if h < 3 {
+		h = 3
+	}
+	return h
+}
+
+func (m *fwModel) scrollToCursor() {
+	vh := m.visibleHeight()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	} else if m.cursor >= m.offset+vh {
+		m.offset = m.cursor - vh + 1
+	}
+}
+
+func (m fwModel) Update(msg tea.Msg) (fwModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case fwLoadedMsg:
+		m.loading = false
+		m.rules = msg.rules
+		m.cursor = 0
+		m.offset = 0
+		return m, nil
+
+	case fwErrMsg:
+		m.loading = false
+		m.err = msg.err.Error()
+		return m, nil
+
+	case fwOKMsg:
+		m.statusMsg = msg.msg
+		m.showForm = false
+		return m, m.load()
+
+	case tea.KeyMsg:
+		if m.showForm {
+			return m.updateForm(msg)
+		}
+		switch msg.String() {
+		case "j", "down":
+			if m.cursor < len(m.rules)-1 {
+				m.cursor++
+				m.scrollToCursor()
+			}
+		case "k", "up":
+			if m.cursor > 0 {
+				m.cursor--
+				m.scrollToCursor()
+			}
+		case "g":
+			m.cursor = 0
+			m.offset = 0
+		case "G":
+			if len(m.rules) > 0 {
+				m.cursor = len(m.rules) - 1
+				m.scrollToCursor()
+			}
+		case "n":
+			m.ipInput.SetValue("")
+			m.modeInput.SetValue("block")
+			m.noteInput.SetValue("")
+			m.formFocus = 0
+			m.ipInput.Focus()
+			m.modeInput.Blur()
+			m.noteInput.Blur()
+			m.showForm = true
+			m.err = ""
+			m.statusMsg = ""
+		case "d":
+			if len(m.rules) > 0 && m.cursor < len(m.rules) {
+				id := m.rules[m.cursor].ID
+				zoneID := m.zoneID
+				client := m.client
+				m.loading = true
+				return m, func() tea.Msg {
+					if err := client.DeleteAccessRule(context.Background(), zoneID, id); err != nil {
+						return fwErrMsg{err}
+					}
+					return fwOKMsg{"Rule deleted"}
+				}
+			}
+		case "r":
+			m.loading = true
+			return m, m.load()
+		}
+	}
+	return m, nil
+}
+
+func (m fwModel) updateForm(msg tea.KeyMsg) (fwModel, tea.Cmd) {
+	inputs := []*textinput.Model{&m.ipInput, &m.modeInput, &m.noteInput}
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.showForm = false
+		return m, nil
+	case tea.KeyTab, tea.KeyDown:
+		inputs[m.formFocus].Blur()
+		m.formFocus = (m.formFocus + 1) % len(inputs)
+		inputs[m.formFocus].Focus()
+		return m, textinput.Blink
+	case tea.KeyShiftTab, tea.KeyUp:
+		inputs[m.formFocus].Blur()
+		m.formFocus = (m.formFocus - 1 + len(inputs)) % len(inputs)
+		inputs[m.formFocus].Focus()
+		return m, textinput.Blink
+	case tea.KeyEnter:
+		if m.formFocus < len(inputs)-1 {
+			inputs[m.formFocus].Blur()
+			m.formFocus++
+			inputs[m.formFocus].Focus()
+			return m, textinput.Blink
+		}
+		return m.submitForm()
+	}
+	var cmd tea.Cmd
+	switch m.formFocus {
+	case 0:
+		m.ipInput, cmd = m.ipInput.Update(msg)
+	case 1:
+		m.modeInput, cmd = m.modeInput.Update(msg)
+	case 2:
+		m.noteInput, cmd = m.noteInput.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m fwModel) submitForm() (fwModel, tea.Cmd) {
+	value := strings.TrimSpace(m.ipInput.Value())
+	mode := strings.TrimSpace(m.modeInput.Value())
+	note := strings.TrimSpace(m.noteInput.Value())
+
+	if value == "" {
+		m.err = "IP/CIDR/country is required"
+		return m, nil
+	}
+	if mode == "" {
+		mode = "block"
+	}
+
+	target := "ip"
+	if strings.Contains(value, "/") {
+		target = "ip_range"
+	} else if len(value) == 2 && !strings.Contains(value, ".") && !strings.Contains(value, ":") {
+		target = "country"
+	}
+
+	rule := cf.AccessRule{
+		Mode:  mode,
+		Notes: note,
+		Configuration: cf.AccessRuleConfiguration{Target: target, Value: value},
+	}
+	client := m.client
+	zoneID := m.zoneID
+
+	return m, func() tea.Msg {
+		if _, err := client.CreateAccessRule(context.Background(), zoneID, rule); err != nil {
+			return fwErrMsg{err}
+		}
+		return fwOKMsg{"Rule created"}
+	}
+}
+
+func (m fwModel) View() string {
+	if m.showForm {
+		return m.formView()
+	}
+
+	var b strings.Builder
+	title := styles.SectionTitle.Render("Firewall — IP Access Rules")
+	if m.loading {
+		b.WriteString(title + "  " + styles.DimItem.Render("loading...") + "\n\n")
+	} else {
+		b.WriteString(title + "\n\n")
+	}
+
+	if m.err != "" {
+		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n\n")
+	}
+	if m.statusMsg != "" {
+		b.WriteString(styles.Success.Render("✓ "+m.statusMsg) + "\n\n")
+	}
+
+	b.WriteString(m.renderTable())
+	b.WriteString("\n")
+	b.WriteString(styles.Help.Render("[n] new  [d] delete  [r] refresh  [j/k] navigate  [g/G] top/bottom"))
+
+	return b.String()
+}
+
+func (m fwModel) renderTable() string {
+	if len(m.rules) == 0 {
+		return styles.DimItem.Render("  No access rules found.") + "\n"
+	}
+
+	available := m.width - 8
+	if available < 40 {
+		available = 40
+	}
+	modeW := 11
+	targetW := 10
+	valueW := 20
+	noteW := available - modeW - targetW - valueW
+	if noteW < 8 {
+		noteW = 8
+	}
+
+	header := lipgloss.JoinHorizontal(lipgloss.Top,
+		styles.TableHeader.Width(modeW).Render("MODE"),
+		styles.TableHeader.Width(valueW).Render("VALUE"),
+		styles.TableHeader.Width(targetW).Render("TARGET"),
+		styles.TableHeader.Width(noteW).Render("NOTES"),
+	)
+
+	var b strings.Builder
+	b.WriteString("  " + header + "\n")
+	b.WriteString("  " + styles.DimItem.Render(strings.Repeat("─", available)) + "\n")
+
+	vh := m.visibleHeight()
+	end := m.offset + vh
+	if end > len(m.rules) {
+		end = len(m.rules)
+	}
+
+	sel := lipgloss.NewStyle().Foreground(styles.Orange).Bold(true)
+	normal := lipgloss.NewStyle().Foreground(styles.White)
+	dim := lipgloss.NewStyle().Foreground(styles.DimGray)
+
+	for i := m.offset; i < end; i++ {
+		r := m.rules[i]
+		isSelected := i == m.cursor
+
+		value := runesTrunc(r.Configuration.Value, valueW-1)
+		notes := runesTrunc(r.Notes, noteW-1)
+
+		if isSelected {
+			row := "▸ " + sel.Width(modeW).Render(r.Mode) +
+				sel.Width(valueW).Render(value) +
+				sel.Width(targetW).Render(r.Configuration.Target) +
+				sel.Width(noteW).Render(notes)
+			b.WriteString(row + "\n")
+		} else {
+			row := "  " + normal.Width(modeW).Render(r.Mode) +
+				dim.Width(valueW).Render(value) +
+				dim.Width(targetW).Render(r.Configuration.Target) +
+				dim.Width(noteW).Render(notes)
+			b.WriteString(row + "\n")
+		}
+	}
+
+	if len(m.rules) > vh {
+		b.WriteString(styles.DimItem.Render(fmt.Sprintf(
+			"  %d-%d of %d", m.offset+1, end, len(m.rules))) + "\n")
+	}
+
+	return b.String()
+}
+
+func (m fwModel) formView() string {
+	inputs := []textinput.Model{m.ipInput, m.modeInput, m.noteInput}
+	var b strings.Builder
+	b.WriteString(styles.SectionTitle.Render("New Access Rule") + "\n\n")
+	for i, f := range inputs {
+		if i == m.formFocus {
+			b.WriteString(styles.SelectedItem.Render("> ") + f.View() + "\n")
+		} else {
+			b.WriteString("  " + f.View() + "\n")
+		}
+	}
+	b.WriteString("\n")
+	if m.err != "" {
+		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n\n")
+	}
+	b.WriteString(styles.Help.Render("[tab/↑↓] move  [enter] next/submit  [esc] cancel"))
+	return b.String()
+}
+
+func (m *fwModel) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+}
