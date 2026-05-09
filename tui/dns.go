@@ -10,12 +10,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/logger"
 	"github.com/mrbooshehri/cfctl/styles"
 )
 
 type dnsModel struct {
 	client      *api.Client
+	log         *logger.Logger
 	zoneID      string
+	zoneName    string
 	records     []cf.DNSRecord
 	cursor      int
 	offset      int
@@ -42,17 +45,24 @@ type dnsLoadedMsg struct{ records []cf.DNSRecord }
 type dnsErrMsg struct{ err error }
 type dnsOKMsg struct{ msg string }
 
-func newDNSModel(client *api.Client, zoneID string) dnsModel {
-	return dnsModel{client: client, zoneID: zoneID}
+func newDNSModel(client *api.Client, log *logger.Logger, zoneID, zoneName string) dnsModel {
+	return dnsModel{client: client, log: log, zoneID: zoneID, zoneName: zoneName}
 }
 
 func (m dnsModel) Init() tea.Cmd { return m.loadRecords() }
 
 func (m dnsModel) loadRecords() tea.Cmd {
+	client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 	return func() tea.Msg {
-		records, err := m.client.ListDNSRecords(context.Background(), m.zoneID)
+		records, err := client.ListDNSRecords(context.Background(), zoneID)
 		if err != nil {
+			if log != nil {
+				log.Write(logger.LevelError, "DNS", zoneName, "List records: "+err.Error())
+			}
 			return dnsErrMsg{err}
+		}
+		if log != nil {
+			log.Write(logger.LevelInfo, "DNS", zoneName, fmt.Sprintf("Listed %d records", len(records)))
 		}
 		return dnsLoadedMsg{records}
 	}
@@ -255,6 +265,7 @@ func (m dnsModel) submitForm() (dnsModel, tea.Cmd) {
 	zoneID := m.zoneID
 
 	proxied := m.form.proxied
+	log, zoneName := m.log, m.zoneName
 
 	if m.form.isEdit {
 		editID := m.editID
@@ -263,7 +274,14 @@ func (m dnsModel) submitForm() (dnsModel, tea.Cmd) {
 		}
 		return m, func() tea.Msg {
 			if _, err := client.UpdateDNSRecord(context.Background(), zoneID, params); err != nil {
+				if log != nil {
+					log.Write(logger.LevelError, "DNS", zoneName, "Update record: "+err.Error())
+				}
 				return dnsErrMsg{err}
+			}
+			if log != nil {
+				log.Write(logger.LevelSuccess, "DNS", zoneName,
+					fmt.Sprintf("Updated %s record %s → %s", recType, name, content))
 			}
 			return dnsOKMsg{"Record updated"}
 		}
@@ -274,7 +292,14 @@ func (m dnsModel) submitForm() (dnsModel, tea.Cmd) {
 	}
 	return m, func() tea.Msg {
 		if _, err := client.CreateDNSRecord(context.Background(), zoneID, params); err != nil {
+			if log != nil {
+				log.Write(logger.LevelError, "DNS", zoneName, "Create record: "+err.Error())
+			}
 			return dnsErrMsg{err}
+		}
+		if log != nil {
+			log.Write(logger.LevelSuccess, "DNS", zoneName,
+				fmt.Sprintf("Created %s record %s → %s", recType, name, content))
 		}
 		return dnsOKMsg{"Record created"}
 	}
@@ -439,14 +464,20 @@ func (m dnsModel) updateConfirm(msg tea.KeyMsg) (dnsModel, tea.Cmd) {
 			m.showConfirm = false
 			return m, nil
 		}
-		id := m.records[m.confirmIdx].ID
-		zoneID := m.zoneID
-		client := m.client
+		r := m.records[m.confirmIdx]
+		client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 		m.showConfirm = false
 		m.loading = true
 		return m, func() tea.Msg {
-			if err := client.DeleteDNSRecord(context.Background(), zoneID, id); err != nil {
+			if err := client.DeleteDNSRecord(context.Background(), zoneID, r.ID); err != nil {
+				if log != nil {
+					log.Write(logger.LevelError, "DNS", zoneName, "Delete record: "+err.Error())
+				}
 				return dnsErrMsg{err}
+			}
+			if log != nil {
+				log.Write(logger.LevelSuccess, "DNS", zoneName,
+					fmt.Sprintf("Deleted %s record %s → %s", r.Type, r.Name, r.Content))
 			}
 			return dnsOKMsg{"Record deleted"}
 		}

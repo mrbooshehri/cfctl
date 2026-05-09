@@ -10,12 +10,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/logger"
 	"github.com/mrbooshehri/cfctl/styles"
 )
 
 type fwModel struct {
 	client      *api.Client
+	log         *logger.Logger
 	zoneID      string
+	zoneName    string
 	rules       []cf.AccessRule
 	cursor      int
 	offset      int
@@ -37,7 +40,7 @@ type fwLoadedMsg struct{ rules []cf.AccessRule }
 type fwErrMsg struct{ err error }
 type fwOKMsg struct{ msg string }
 
-func newFWModel(client *api.Client, zoneID string) fwModel {
+func newFWModel(client *api.Client, log *logger.Logger, zoneID, zoneName string) fwModel {
 	ip := textinput.New()
 	ip.Placeholder = "IP / CIDR / country code"
 	ip.Width = 45
@@ -52,7 +55,9 @@ func newFWModel(client *api.Client, zoneID string) fwModel {
 
 	return fwModel{
 		client:    client,
+		log:       log,
 		zoneID:    zoneID,
+		zoneName:  zoneName,
 		ipInput:   ip,
 		modeInput: mode,
 		noteInput: note,
@@ -62,10 +67,17 @@ func newFWModel(client *api.Client, zoneID string) fwModel {
 func (m fwModel) Init() tea.Cmd { return m.load() }
 
 func (m fwModel) load() tea.Cmd {
+	client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 	return func() tea.Msg {
-		rules, err := m.client.ListAccessRules(context.Background(), m.zoneID)
+		rules, err := client.ListAccessRules(context.Background(), zoneID)
 		if err != nil {
+			if log != nil {
+				log.Write(logger.LevelError, "Firewall", zoneName, "List rules: "+fwErrString(err))
+			}
 			return fwErrMsg{err}
+		}
+		if log != nil {
+			log.Write(logger.LevelInfo, "Firewall", zoneName, fmt.Sprintf("Listed %d access rules", len(rules)))
 		}
 		return fwLoadedMsg{rules}
 	}
@@ -221,12 +233,18 @@ func (m fwModel) submitForm() (fwModel, tea.Cmd) {
 		Notes: note,
 		Configuration: cf.AccessRuleConfiguration{Target: target, Value: value},
 	}
-	client := m.client
-	zoneID := m.zoneID
+	client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 
 	return m, func() tea.Msg {
 		if _, err := client.CreateAccessRule(context.Background(), zoneID, rule); err != nil {
+			if log != nil {
+				log.Write(logger.LevelError, "Firewall", zoneName, "Create rule: "+err.Error())
+			}
 			return fwErrMsg{err}
+		}
+		if log != nil {
+			log.Write(logger.LevelSuccess, "Firewall", zoneName,
+				fmt.Sprintf("Created %s rule for %s (%s)", mode, value, target))
 		}
 		return fwOKMsg{"Rule created"}
 	}
@@ -356,14 +374,20 @@ func (m fwModel) updateConfirm(msg tea.KeyMsg) (fwModel, tea.Cmd) {
 			m.showConfirm = false
 			return m, nil
 		}
-		id := m.rules[m.confirmIdx].ID
-		zoneID := m.zoneID
-		client := m.client
+		r := m.rules[m.confirmIdx]
+		client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 		m.showConfirm = false
 		m.loading = true
 		return m, func() tea.Msg {
-			if err := client.DeleteAccessRule(context.Background(), zoneID, id); err != nil {
+			if err := client.DeleteAccessRule(context.Background(), zoneID, r.ID); err != nil {
+				if log != nil {
+					log.Write(logger.LevelError, "Firewall", zoneName, "Delete rule: "+err.Error())
+				}
 				return fwErrMsg{err}
+			}
+			if log != nil {
+				log.Write(logger.LevelSuccess, "Firewall", zoneName,
+					fmt.Sprintf("Deleted %s rule for %s (%s)", r.Mode, r.Configuration.Value, r.Configuration.Target))
 			}
 			return fwOKMsg{"Rule deleted"}
 		}

@@ -9,32 +9,42 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/logger"
 	"github.com/mrbooshehri/cfctl/styles"
 )
 
 type sslModel struct {
-	client  *api.Client
-	zoneID  string
-	packs   []cf.CertificatePack
-	loading bool
-	err     string
-	cursor  int
+	client   *api.Client
+	log      *logger.Logger
+	zoneID   string
+	zoneName string
+	packs    []cf.CertificatePack
+	loading  bool
+	err      string
+	cursor   int
 }
 
 type sslLoadedMsg struct{ packs []cf.CertificatePack }
 type sslErrMsg struct{ err error }
 
-func newSSLModel(client *api.Client, zoneID string) sslModel {
-	return sslModel{client: client, zoneID: zoneID}
+func newSSLModel(client *api.Client, log *logger.Logger, zoneID, zoneName string) sslModel {
+	return sslModel{client: client, log: log, zoneID: zoneID, zoneName: zoneName}
 }
 
 func (m sslModel) Init() tea.Cmd { return m.load() }
 
 func (m sslModel) load() tea.Cmd {
+	client, log, zoneID, zoneName := m.client, m.log, m.zoneID, m.zoneName
 	return func() tea.Msg {
-		packs, err := m.client.ListCertificatePacks(context.Background(), m.zoneID)
+		packs, err := client.ListCertificatePacks(context.Background(), zoneID)
 		if err != nil {
+			if log != nil {
+				log.Write(logger.LevelError, "SSL/TLS", zoneName, "List certs: "+sslErrString(err))
+			}
 			return sslErrMsg{err}
+		}
+		if log != nil {
+			log.Write(logger.LevelInfo, "SSL/TLS", zoneName, fmt.Sprintf("Listed %d certificate packs", len(packs)))
 		}
 		return sslLoadedMsg{packs}
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/logger"
 	"github.com/mrbooshehri/cfctl/styles"
 )
 
@@ -26,9 +27,10 @@ const (
 	sectionDNS section = iota
 	sectionFirewall
 	sectionSSL
+	sectionLogs
 )
 
-var sectionNames = []string{"DNS", "Firewall", "SSL/TLS"}
+var sectionNames = []string{"DNS", "Firewall", "SSL/TLS", "Logs"}
 
 type zonesLoadedMsg struct{ zones []cf.Zone }
 type zonesErrMsg struct{ err error }
@@ -37,15 +39,17 @@ type AppModel struct {
 	state         appState
 	setup         setupModel
 	client        *api.Client
+	log           *logger.Logger
 	zones         []cf.Zone
-	zoneIdx       int // active zone (loaded in content)
-	sectionIdx    int // active section (loaded in content)
-	sidebarCursor int // cursor position in unified sidebar list
+	zoneIdx       int
+	sectionIdx    int
+	sidebarCursor int
 	focusSide     bool
 	dns           dnsModel
 	fw            fwModel
 	ssl           sslModel
-	sectionInit   [3]bool
+	logs          logsModel
+	sectionInit   [4]bool
 	err           string
 	width         int
 	height        int
@@ -53,6 +57,11 @@ type AppModel struct {
 
 func New(token string) (AppModel, error) {
 	m := AppModel{focusSide: true}
+
+	log, err := logger.New()
+	if err == nil {
+		m.log = log
+	}
 
 	if token == "" {
 		m.state = stateSetup
@@ -102,7 +111,7 @@ func (m *AppModel) applySidebarCursor() tea.Cmd {
 	if m.sidebarCursor < n {
 		if m.zoneIdx != m.sidebarCursor {
 			m.zoneIdx = m.sidebarCursor
-			m.sectionInit = [3]bool{}
+			m.sectionInit = [4]bool{}
 			return m.initCurrentSection()
 		}
 	} else {
@@ -196,6 +205,11 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sidebarCursor = len(m.zones) + 2
 			cmd := m.initCurrentSection()
 			return m, cmd
+		case "4":
+			m.sectionIdx = 3
+			m.sidebarCursor = len(m.zones) + 3
+			cmd := m.initCurrentSection()
+			return m, cmd
 		// h/l switch panels (vim-style)
 		case "h":
 			if !m.focusSide && !m.contentHasForm() {
@@ -264,23 +278,35 @@ func (m AppModel) currentZoneID() string {
 }
 
 func (m *AppModel) initCurrentSection() tea.Cmd {
+	// Logs section doesn't need a zone
+	if section(m.sectionIdx) == sectionLogs {
+		if !m.sectionInit[m.sectionIdx] {
+			m.sectionInit[m.sectionIdx] = true
+			m.logs = newLogsModel(m.log)
+			m.logs.SetSize(m.contentWidth(), m.contentHeight())
+			return m.logs.Init()
+		}
+		return nil
+	}
+
 	zoneID := m.currentZoneID()
 	if zoneID == "" || m.sectionInit[m.sectionIdx] {
 		return nil
 	}
 	m.sectionInit[m.sectionIdx] = true
+	zoneName := m.zones[m.zoneIdx].Name
 
 	switch section(m.sectionIdx) {
 	case sectionDNS:
-		m.dns = newDNSModel(m.client, zoneID)
+		m.dns = newDNSModel(m.client, m.log, zoneID, zoneName)
 		m.dns.SetSize(m.contentWidth(), m.contentHeight())
 		return m.dns.Init()
 	case sectionFirewall:
-		m.fw = newFWModel(m.client, zoneID)
+		m.fw = newFWModel(m.client, m.log, zoneID, zoneName)
 		m.fw.SetSize(m.contentWidth(), m.contentHeight())
 		return m.fw.Init()
 	case sectionSSL:
-		m.ssl = newSSLModel(m.client, zoneID)
+		m.ssl = newSSLModel(m.client, m.log, zoneID, zoneName)
 		return m.ssl.Init()
 	}
 	return nil
@@ -297,6 +323,10 @@ func (m AppModel) updateSection(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var s sslModel
 		s, cmd = m.ssl.Update(msg)
 		m.ssl = s
+	case sectionLogs:
+		var l logsModel
+		l, cmd = m.logs.Update(msg)
+		m.logs = l
 	}
 	return m, cmd
 }
@@ -306,6 +336,7 @@ func (m *AppModel) resizeSections() {
 	ch := m.contentHeight()
 	m.dns.SetSize(cw, ch)
 	m.fw.SetSize(cw, ch)
+	m.logs.SetSize(cw, ch)
 }
 
 func (m AppModel) sidebarWidth() int {
@@ -366,7 +397,7 @@ func (m AppModel) headerView() string {
 		styles.DimItem.Render("zone:") + " " +
 		styles.NormalItem.Render(zoneName)
 
-	hint := "[h/l] panels  [j/k] navigate  [1-3] sections  [q] quit"
+	hint := "[h/l] panels  [j/k] navigate  [1-4] sections  [q] quit"
 	right := styles.Help.Render(hint)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 0 {
@@ -439,6 +470,8 @@ func (m AppModel) contentView() string {
 		return m.fw.View()
 	case sectionSSL:
 		return m.ssl.View()
+	case sectionLogs:
+		return m.logs.View()
 	}
 	return ""
 }
