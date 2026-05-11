@@ -79,9 +79,9 @@ func (m *logsModel) applyFilter() {
 }
 
 // vpHeight is the number of lines the viewport occupies.
-// Fixed lines: title(1) + blank(1) + col-header+sep(2) + blank(1) + help(1) = 6
+// Overhead: border(2) + title+blank(2) + col-header+sep(2) + indicator(1) + blank(1) + help(1) = 9
 func (m logsModel) vpHeight() int {
-	h := m.height - 6
+	h := m.height - 9
 	if h < 3 {
 		h = 3
 	}
