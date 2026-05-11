@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/mrbooshehri/cfctl/api"
+	"github.com/mrbooshehri/cfctl/config"
 	"github.com/mrbooshehri/cfctl/logger"
 	"github.com/mrbooshehri/cfctl/styles"
 )
@@ -19,6 +20,7 @@ const (
 	stateSetup appState = iota
 	stateLoadingZones
 	stateMain
+	stateAccountMgr
 )
 
 type section int
@@ -38,6 +40,8 @@ type zonesErrMsg struct{ err error }
 type AppModel struct {
 	state         appState
 	setup         setupModel
+	acctMgr       accountMgrModel
+	cfg           *config.Config
 	client        *api.Client
 	log           *logger.Logger
 	zones         []cf.Zone
@@ -55,14 +59,15 @@ type AppModel struct {
 	height        int
 }
 
-func New(token string) (AppModel, error) {
-	m := AppModel{focusSide: true}
+func New(cfg *config.Config) (AppModel, error) {
+	m := AppModel{focusSide: true, cfg: cfg}
 
 	log, err := logger.New()
 	if err == nil {
 		m.log = log
 	}
 
+	token := cfg.ActiveToken()
 	if token == "" {
 		m.state = stateSetup
 		m.setup = newSetupModel()
@@ -99,13 +104,10 @@ func (m AppModel) loadZones() tea.Cmd {
 	}
 }
 
-// sidebarTotal is the total number of navigable items in the sidebar.
 func (m AppModel) sidebarTotal() int {
 	return len(m.zones) + len(sectionNames)
 }
 
-// applySidebarCursor syncs zoneIdx/sectionIdx from sidebarCursor and returns
-// any needed init command.
 func (m *AppModel) applySidebarCursor() tea.Cmd {
 	n := len(m.zones)
 	if m.sidebarCursor < n {
@@ -131,9 +133,14 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeSections()
-		if m.state == stateSetup {
+		switch m.state {
+		case stateSetup:
 			var cmd tea.Cmd
 			m.setup, cmd = m.setup.Update(msg)
+			return m, cmd
+		case stateAccountMgr:
+			var cmd tea.Cmd
+			m.acctMgr, cmd = m.acctMgr.Update(msg)
 			return m, cmd
 		}
 		return m, nil
@@ -143,17 +150,59 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+	// ── first-run setup produced a valid token ───────────────────────────
 	case tokenValidMsg:
+		m.cfg.AddToken(msg.name, msg.token)
+		_ = config.Save(m.cfg)
 		m.client = msg.client
 		m.state = stateLoadingZones
+		m.sectionInit = [4]bool{}
+		m.zones = nil
+		m.zoneIdx = 0
+		m.sidebarCursor = 0
+		m.err = ""
 		return m, m.loadZones()
+
+	// ── account manager asked us to switch (or there are no accounts left) ─
+	case switchAccountMsg:
+		if msg.name == "" {
+			// All accounts deleted — back to first-run setup.
+			m.client = nil
+			m.state = stateSetup
+			m.setup = newSetupModel()
+			return m, m.setup.Init()
+		}
+		if msg.name == m.cfg.Active && m.client != nil {
+			m.state = stateMain
+			return m, nil
+		}
+		m.cfg.Active = msg.name
+		token := m.cfg.ActiveToken()
+		client, err := api.New(token)
+		if err != nil {
+			m.err = err.Error()
+			m.state = stateMain
+			return m, nil
+		}
+		m.client = client
+		m.state = stateLoadingZones
+		m.sectionInit = [4]bool{}
+		m.zones = nil
+		m.zoneIdx = 0
+		m.sidebarCursor = 0
+		m.err = ""
+		return m, m.loadZones()
+
+	// ── account manager closed without switching ──────────────────────────
+	case closeAccountMgrMsg:
+		m.state = stateMain
+		return m, nil
 
 	case zonesLoadedMsg:
 		m.zones = msg.zones
 		if len(m.zones) > 0 {
 			m.state = stateMain
-			cmd := m.initCurrentSection()
-			return m, cmd
+			return m, m.initCurrentSection()
 		}
 		m.err = "No zones found for this token"
 		m.state = stateMain
@@ -170,6 +219,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSetup(msg)
 	case stateMain:
 		return m.updateMain(msg)
+	case stateAccountMgr:
+		var cmd tea.Cmd
+		m.acctMgr, cmd = m.acctMgr.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -189,28 +242,28 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.contentHasForm() {
 				return m, tea.Quit
 			}
-		// 1-3 jump directly to a section from anywhere
+		case "t":
+			if !m.contentHasForm() {
+				m.state = stateAccountMgr
+				m.acctMgr = newAccountMgrModel(m.cfg)
+				return m, nil
+			}
 		case "1":
 			m.sectionIdx = 0
 			m.sidebarCursor = len(m.zones) + 0
-			cmd := m.initCurrentSection()
-			return m, cmd
+			return m, m.initCurrentSection()
 		case "2":
 			m.sectionIdx = 1
 			m.sidebarCursor = len(m.zones) + 1
-			cmd := m.initCurrentSection()
-			return m, cmd
+			return m, m.initCurrentSection()
 		case "3":
 			m.sectionIdx = 2
 			m.sidebarCursor = len(m.zones) + 2
-			cmd := m.initCurrentSection()
-			return m, cmd
+			return m, m.initCurrentSection()
 		case "4":
 			m.sectionIdx = 3
 			m.sidebarCursor = len(m.zones) + 3
-			cmd := m.initCurrentSection()
-			return m, cmd
-		// h/l switch panels (vim-style)
+			return m, m.initCurrentSection()
 		case "h":
 			if !m.focusSide && !m.contentHasForm() {
 				m.focusSide = true
@@ -233,23 +286,19 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "j", "down":
 				if m.sidebarCursor < m.sidebarTotal()-1 {
 					m.sidebarCursor++
-					cmd := m.applySidebarCursor()
-					return m, cmd
+					return m, m.applySidebarCursor()
 				}
 			case "k", "up":
 				if m.sidebarCursor > 0 {
 					m.sidebarCursor--
-					cmd := m.applySidebarCursor()
-					return m, cmd
+					return m, m.applySidebarCursor()
 				}
 			case "g":
 				m.sidebarCursor = 0
-				cmd := m.applySidebarCursor()
-				return m, cmd
+				return m, m.applySidebarCursor()
 			case "G":
 				m.sidebarCursor = m.sidebarTotal() - 1
-				cmd := m.applySidebarCursor()
-				return m, cmd
+				return m, m.applySidebarCursor()
 			}
 			return m, nil
 		}
@@ -258,8 +307,6 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateSection(msg)
 }
 
-// contentHasForm reports whether the active section has an open input form,
-// so we can suppress panel-switching and quit shortcuts.
 func (m AppModel) contentHasForm() bool {
 	switch section(m.sectionIdx) {
 	case sectionDNS:
@@ -278,7 +325,6 @@ func (m AppModel) currentZoneID() string {
 }
 
 func (m *AppModel) initCurrentSection() tea.Cmd {
-	// Logs section doesn't need a zone
 	if section(m.sectionIdx) == sectionLogs {
 		if !m.sectionInit[m.sectionIdx] {
 			m.sectionInit[m.sectionIdx] = true
@@ -357,9 +403,11 @@ func (m AppModel) View() string {
 	switch m.state {
 	case stateSetup:
 		return m.setup.View()
+	case stateAccountMgr:
+		return m.acctMgr.View()
 	case stateLoadingZones:
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			styles.Title.Render("cfctl")+"\n\n"+styles.DimItem.Render("Loading zones..."),
+			styles.Title.Render("cfctl")+"\n\n"+styles.DimItem.Render("Loading zones…"),
 		)
 	case stateMain:
 		return m.mainView()
@@ -384,7 +432,6 @@ func (m AppModel) mainView() string {
 		sideStyle.Render(m.sidebarView()),
 		contentStyle.Render(m.contentView()),
 	)
-
 	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), body)
 }
 
@@ -394,10 +441,13 @@ func (m AppModel) headerView() string {
 		zoneName = m.zones[m.zoneIdx].Name
 	}
 	left := styles.Header.Render(" cfctl ") + "  " +
-		styles.DimItem.Render("zone:") + " " +
-		styles.NormalItem.Render(zoneName)
+		styles.DimItem.Render("zone:") + " " + styles.NormalItem.Render(zoneName)
+	if m.cfg.Active != "" {
+		left += "   " + styles.DimItem.Render("account:") + " " +
+			styles.NormalItem.Render(m.cfg.Active)
+	}
 
-	hint := "[h/l] panels  [j/k] navigate  [1-4] sections  [q] quit"
+	hint := "[h/l] panels  [j/k] navigate  [1-4] sections  [t] accounts  [q] quit"
 	right := styles.Help.Render(hint)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 0 {
@@ -415,11 +465,10 @@ func (m AppModel) sidebarView() string {
 	var b strings.Builder
 	sw := m.sidebarWidth()
 
-	renderItem := func(cursorIdx int, label, arrow string) {
-		isCursor := m.focusSide && m.sidebarCursor == cursorIdx
-		isActive := (cursorIdx < len(m.zones) && m.zoneIdx == cursorIdx) ||
-			(cursorIdx >= len(m.zones) && m.sectionIdx == cursorIdx-len(m.zones))
-
+	renderItem := func(idx int, label, arrow string) {
+		isCursor := m.focusSide && m.sidebarCursor == idx
+		isActive := (idx < len(m.zones) && m.zoneIdx == idx) ||
+			(idx >= len(m.zones) && m.sectionIdx == idx-len(m.zones))
 		var line string
 		switch {
 		case isCursor:
@@ -443,8 +492,7 @@ func (m AppModel) sidebarView() string {
 
 	b.WriteString("\n" + styles.DimItem.Render("SECTIONS") + "\n")
 	for i, name := range sectionNames {
-		label := fmt.Sprintf("[%d] %s", i+1, name)
-		renderItem(len(m.zones)+i, label, "▸ ")
+		renderItem(len(m.zones)+i, fmt.Sprintf("[%d] %s", i+1, name), "▸ ")
 	}
 
 	if m.focusSide {
@@ -452,7 +500,6 @@ func (m AppModel) sidebarView() string {
 	} else {
 		b.WriteString("\n" + styles.Help.Render("h → sidebar"))
 	}
-
 	return b.String()
 }
 

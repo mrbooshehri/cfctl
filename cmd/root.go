@@ -20,7 +20,7 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("loading config: %w", err)
 		}
 
-		model, err := tui.New(cfg.Token)
+		model, err := tui.New(cfg)
 		if err != nil {
 			return fmt.Errorf("initializing app: %w", err)
 		}
