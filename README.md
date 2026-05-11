@@ -21,12 +21,14 @@ A terminal UI for managing Cloudflare — DNS records, firewall rules, and SSL c
 ## Features
 
 ### Phase 1 (current)
+- **Multi-account support** — manage multiple Cloudflare API tokens; switch accounts on the fly with `[t]`
 - **Zone switching** — navigate all your Cloudflare zones from the sidebar
 - **DNS records** — list, create, edit, and delete records (A, AAAA, CNAME, MX, TXT, and more); toggle proxy mode per record
 - **Firewall / IP Access Rules** — list, add, and delete allow/block/challenge rules
 - **SSL/TLS** — view certificate packs and their status per zone
+- **Activity log** — per-type filtered log of all actions taken in the session
 - Vim-style navigation (`j`/`k`, `h`/`l`, `g`/`G`) throughout
-- First-run token wizard with validation
+- First-run token wizard with live validation
 
 ### Planned
 - Workers, KV, D1 browser
@@ -67,7 +69,7 @@ cfctl uses **Cloudflare API Tokens** (not the legacy global API key).
 3. Use the *Edit zone DNS* template or build a custom token with the permissions you need
 4. Copy the token — it starts with `cfut_`
 
-On first run, cfctl will prompt you for the token, validate it, and save it to:
+On first run cfctl prompts for an account name and token, validates the token, and saves to:
 
 ```
 ~/.config/cfctl/config.toml
@@ -78,6 +80,31 @@ The file is created with `chmod 0600` (readable only by your user). To skip the 
 ```bash
 export CFCTL_TOKEN=cfut_...
 ```
+
+### Multiple accounts
+
+Press `t` from the main view to open the account manager. From there you can:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | Navigate the account list |
+| `enter` | Switch to the selected account |
+| `a` | Add a new account (prompts for name + token) |
+| `e` | Edit selected account (rename and/or replace token) |
+| `d` | Delete selected account (with confirmation) |
+| `esc` / `q` | Close account manager |
+
+Config file format with multiple accounts:
+
+```toml
+active = "work"
+
+[tokens]
+  "personal" = "cfut_aaa..."
+  "work"     = "cfut_bbb..."
+```
+
+Existing single-token configs are migrated automatically on first run.
 
 ## Usage
 
@@ -100,6 +127,8 @@ cfctl version  # print version
 | `1` | Go to DNS section |
 | `2` | Go to Firewall section |
 | `3` | Go to SSL/TLS section |
+| `4` | Go to Logs section |
+| `t` | Open account manager |
 | `q` / `ctrl+c` | Quit |
 
 ### DNS records
@@ -136,21 +165,23 @@ Supported targets: `ip`, `ip_range` (CIDR), `country` (2-letter code)
 ```
 cfctl/
 ├── main.go
-├── cmd/           # cobra CLI entry (flags, version subcommand)
-├── config/        # token load/save (~/.config/cfctl/config.toml)
-├── api/           # thin wrappers around cloudflare-go
-│   ├── client.go  # token auth + validation
+├── cmd/              # cobra CLI entry (flags, version subcommand)
+├── config/           # multi-account config load/save (~/.config/cfctl/config.toml)
+├── api/              # thin wrappers around cloudflare-go
+│   ├── client.go     # token auth + validation
 │   ├── zones.go
 │   ├── dns.go
 │   ├── firewall.go
 │   └── ssl.go
-├── tui/           # bubbletea models
-│   ├── app.go     # root model, layout, panel routing
-│   ├── setup.go   # first-run token wizard
-│   ├── dns.go     # DNS records view + form
+├── tui/              # bubbletea models
+│   ├── app.go        # root model, layout, panel routing
+│   ├── setup.go      # first-run account wizard
+│   ├── accountmgr.go # multi-account manager (add/edit/delete/switch)
+│   ├── dns.go        # DNS records view + form
 │   ├── firewall.go
-│   └── ssl.go
-└── styles/        # lipgloss colour palette and shared styles
+│   ├── ssl.go
+│   └── logs.go       # activity log view
+└── styles/           # lipgloss colour palette and shared styles
 ```
 
 ## Dependencies
