@@ -7,13 +7,13 @@ A terminal UI for managing Cloudflare — DNS records, firewall rules, and SSL c
 │ ZONES            ││ DNS Records                                                      │
 │ ▸ gite.io        ││                                                                  │
 │   example.com    ││   TYPE    NAME                  CONTENT            TTL    PROXY  │
-│                  ││   ──────────────────────────────────────────────────────────────  │
+│                  ││   ────────────────────────────────────────────────────────────── │
 │ SECTIONS         ││ ▸ A       gite.io               188.245.60.83      Auto   ✗      │
 │ ▸ [1] DNS        ││   CNAME   www                   gite.io            Auto   ✗      │
 │   [2] Firewall   ││   MX      gite.io               mail.gite.io       3600   ✗      │
 │   [3] SSL/TLS    ││   TXT     _dmarc                v=DMARC1; p=none   Auto   ✗      │
 │                  ││                                                                  │
-│ j/k navigate     ││ [n] new  [e] edit  [d] delete  [r] refresh  [j/k] navigate      │
+│ j/k navigate     ││ [n] new  [e] edit  [d] delete  [r] refresh  [j/k] navigate       │
 │ l/enter select   ││                                                                  │
 ╰──────────────────╯╰──────────────────────────────────────────────────────────────────╯
 ```
