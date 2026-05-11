@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mrbooshehri/cfctl/logger"
@@ -23,16 +24,17 @@ const (
 var filterLabels = []string{"ALL", "INFO", "SUCCESS", "WARN", "ERROR"}
 
 type logsModel struct {
-	log      *logger.Logger
-	all      []logger.Entry
-	visible  []logger.Entry
-	filter   logFilter
-	cursor   int
-	offset   int
-	loading  bool
-	err      string
-	width    int
-	height   int
+	log     *logger.Logger
+	all     []logger.Entry
+	visible []logger.Entry
+	filter  logFilter
+	cursor  int
+	vp      viewport.Model
+	ready   bool
+	loading bool
+	err     string
+	width   int
+	height  int
 }
 
 type logsLoadedMsg struct{ entries []logger.Entry }
@@ -76,20 +78,28 @@ func (m *logsModel) applyFilter() {
 	}
 }
 
-func (m logsModel) visibleHeight() int {
-	h := m.height - 8
+// vpHeight is the number of lines the viewport occupies.
+// Fixed lines: title(1) + blank(1) + col-header+sep(2) + blank(1) + help(1) = 6
+func (m logsModel) vpHeight() int {
+	h := m.height - 6
 	if h < 3 {
 		h = 3
 	}
 	return h
 }
 
-func (m *logsModel) scrollToCursor() {
-	vh := m.visibleHeight()
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	} else if m.cursor >= m.offset+vh {
-		m.offset = m.cursor - vh + 1
+// rebuildViewport re-renders all rows into the viewport and scrolls to cursor.
+func (m *logsModel) rebuildViewport() {
+	m.vp.SetContent(m.renderRows())
+	m.followCursor()
+}
+
+// followCursor adjusts the viewport's Y offset so the cursor row is visible.
+func (m *logsModel) followCursor() {
+	if m.cursor < m.vp.YOffset {
+		m.vp.YOffset = m.cursor
+	} else if m.cursor >= m.vp.YOffset+m.vp.Height {
+		m.vp.YOffset = m.cursor - m.vp.Height + 1
 	}
 }
 
@@ -101,7 +111,10 @@ func (m logsModel) Update(msg tea.Msg) (logsModel, tea.Cmd) {
 		m.visible = make([]logger.Entry, 0, len(m.all))
 		m.applyFilter()
 		m.cursor = 0
-		m.offset = 0
+		if m.ready {
+			m.rebuildViewport()
+			m.vp.GotoTop()
+		}
 		return m, nil
 
 	case logsErrMsg:
@@ -114,7 +127,10 @@ func (m logsModel) Update(msg tea.Msg) (logsModel, tea.Cmd) {
 		m.all = nil
 		m.visible = nil
 		m.cursor = 0
-		m.offset = 0
+		if m.ready {
+			m.vp.SetContent("")
+			m.vp.GotoTop()
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -122,27 +138,36 @@ func (m logsModel) Update(msg tea.Msg) (logsModel, tea.Cmd) {
 		case "j", "down":
 			if m.cursor < len(m.visible)-1 {
 				m.cursor++
-				m.scrollToCursor()
+				m.rebuildViewport()
 			}
+			return m, nil
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
-				m.scrollToCursor()
+				m.rebuildViewport()
 			}
+			return m, nil
 		case "g":
 			m.cursor = 0
-			m.offset = 0
+			m.rebuildViewport()
+			m.vp.GotoTop()
+			return m, nil
 		case "G":
 			if len(m.visible) > 0 {
 				m.cursor = len(m.visible) - 1
-				m.scrollToCursor()
+				m.rebuildViewport()
 			}
+			return m, nil
 		case "f":
 			m.filter = (m.filter + 1) % logFilter(len(filterLabels))
 			m.visible = make([]logger.Entry, 0, len(m.all))
 			m.applyFilter()
 			m.cursor = 0
-			m.offset = 0
+			if m.ready {
+				m.rebuildViewport()
+				m.vp.GotoTop()
+			}
+			return m, nil
 		case "r":
 			m.loading = true
 			return m, m.load()
@@ -155,7 +180,11 @@ func (m logsModel) Update(msg tea.Msg) (logsModel, tea.Cmd) {
 			}
 		}
 	}
-	return m, nil
+
+	// Forward everything else (pgup/pgdn/ctrl+u/ctrl+d/mouse) to the viewport.
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
 }
 
 func levelStyle(level logger.Level) lipgloss.Style {
@@ -181,43 +210,44 @@ func (m logsModel) View() string {
 		Bold(true).
 		Padding(0, 1).
 		Render(filterLabels[m.filter])
-
 	title := styles.SectionTitle.Render("Activity Log") + "  " + filterBadge
 	if m.loading {
-		title += "  " + styles.DimItem.Render("loading...")
+		title += "  " + styles.DimItem.Render("loading…")
 	}
 	b.WriteString(title + "\n\n")
 
 	if m.err != "" {
-		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n\n")
+		b.WriteString(styles.Error.Render("✗ "+m.err) + "\n")
 	}
 
 	if len(m.visible) == 0 && !m.loading {
 		b.WriteString(styles.DimItem.Render("  No log entries.") + "\n")
 	} else {
-		b.WriteString(m.renderTable())
+		// Fixed column header
+		b.WriteString(m.columnHeader())
+		// Scrollable rows via viewport
+		b.WriteString(m.vp.View() + "\n")
+		// Scroll position indicator
+		if m.vp.TotalLineCount() > m.vp.Height {
+			pct := int(m.vp.ScrollPercent() * 100)
+			info := fmt.Sprintf("  %d/%d  %d%%", m.cursor+1, len(m.visible), pct)
+			b.WriteString(styles.DimItem.Render(info) + "\n")
+		}
 	}
 
 	b.WriteString("\n")
 	b.WriteString(styles.Help.Render(
-		"[j/k] navigate  [f] filter  [r] refresh  [c] clear  [g/G] top/bottom",
+		"[j/k] row  [pgup/pgdn] page  [ctrl+u/d] half-page  [f] filter  [r] refresh  [c] clear",
 	))
 	return b.String()
 }
 
-func (m logsModel) renderTable() string {
-	if len(m.visible) == 0 {
-		return ""
-	}
-
+func (m logsModel) columnHeader() string {
 	available := m.width - 8
 	if available < 50 {
 		available = 50
 	}
-	timeW := 8
-	levelW := 9
-	sectionW := 10
-	zoneW := 18
+	timeW, levelW, sectionW, zoneW := 8, 9, 10, 18
 	msgW := available - timeW - levelW - sectionW - zoneW
 	if msgW < 15 {
 		msgW = 15
@@ -230,21 +260,28 @@ func (m logsModel) renderTable() string {
 		styles.TableHeader.Width(zoneW).Render("ZONE"),
 		styles.TableHeader.Width(msgW).Render("MESSAGE"),
 	)
+	return "  " + header + "\n" +
+		"  " + styles.DimItem.Render(strings.Repeat("─", available)) + "\n"
+}
 
-	var b strings.Builder
-	b.WriteString("  " + header + "\n")
-	b.WriteString("  " + styles.DimItem.Render(strings.Repeat("─", available)) + "\n")
-
-	vh := m.visibleHeight()
-	end := m.offset + vh
-	if end > len(m.visible) {
-		end = len(m.visible)
+// renderRows returns all visible rows as a single string for the viewport.
+func (m logsModel) renderRows() string {
+	if len(m.visible) == 0 {
+		return ""
 	}
 
-	for i := m.offset; i < end; i++ {
-		e := m.visible[i]
-		isSelected := i == m.cursor
+	available := m.width - 8
+	if available < 50 {
+		available = 50
+	}
+	timeW, levelW, sectionW, zoneW := 8, 9, 10, 18
+	msgW := available - timeW - levelW - sectionW - zoneW
+	if msgW < 15 {
+		msgW = 15
+	}
 
+	var b strings.Builder
+	for i, e := range m.visible {
 		ts := e.Time.Format("15:04:05")
 		lvlStyle := levelStyle(e.Level)
 		level := runesTrunc(string(e.Level), levelW-1)
@@ -252,30 +289,22 @@ func (m logsModel) renderTable() string {
 		zone := runesTrunc(e.Zone, zoneW-1)
 		msg := runesTrunc(e.Message, msgW-1)
 
-		if isSelected {
+		if i == m.cursor {
 			sel := lipgloss.NewStyle().Foreground(styles.Orange).Bold(true)
-			row := "▸ " +
+			b.WriteString("▸ " +
 				sel.Width(timeW).Render(ts) +
 				sel.Width(levelW).Render(level) +
 				sel.Width(sectionW).Render(section) +
 				sel.Width(zoneW).Render(zone) +
-				sel.Width(msgW).Render(msg)
-			b.WriteString(row + "\n")
+				sel.Width(msgW).Render(msg) + "\n")
 		} else {
-			row := "  " +
+			b.WriteString("  " +
 				styles.DimItem.Width(timeW).Render(ts) +
 				lvlStyle.Width(levelW).Render(level) +
 				styles.NormalItem.Width(sectionW).Render(section) +
 				styles.DimItem.Width(zoneW).Render(zone) +
-				styles.NormalItem.Width(msgW).Render(msg)
-			b.WriteString(row + "\n")
+				styles.NormalItem.Width(msgW).Render(msg) + "\n")
 		}
-	}
-
-	if len(m.visible) > vh {
-		b.WriteString(styles.DimItem.Render(
-			fmt.Sprintf("  %d-%d of %d", m.offset+1, end, len(m.visible)),
-		) + "\n")
 	}
 	return b.String()
 }
@@ -283,4 +312,8 @@ func (m logsModel) renderTable() string {
 func (m *logsModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	m.vp.Width = w - 2
+	m.vp.Height = m.vpHeight()
+	m.ready = true
+	m.rebuildViewport()
 }
