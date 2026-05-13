@@ -9,9 +9,9 @@ A terminal UI for managing Cloudflare — DNS records, firewall rules, and SSL c
 │   example.com    ││   TYPE    NAME                  CONTENT            TTL    PROXY  │
 │                  ││   ────────────────────────────────────────────────────────────── │
 │ SECTIONS         ││ ▸ A       gite.io               188.245.60.83      Auto   ✗      │
-│ ▸ [1] DNS        ││   CNAME   www                   gite.io            Auto   ✗      │
-│   [2] Firewall   ││   MX      gite.io               mail.gite.io       3600   ✗      │
-│   [3] SSL/TLS    ││   TXT     _dmarc                v=DMARC1; p=none   Auto   ✗      │
+│ ▸ DNS            ││   CNAME   www                   gite.io            Auto   ✗      │
+│   Firewall       ││   MX      gite.io               mail.gite.io       3600   ✗      │
+│   SSL/TLS        ││   TXT     _dmarc                v=DMARC1; p=none   Auto   ✗      │
 │                  ││                                                                  │
 │ j/k navigate     ││ [n] new  [e] edit  [d] delete  [r] refresh  [j/k] navigate       │
 │ l/enter select   ││                                                                  │
@@ -26,7 +26,6 @@ A terminal UI for managing Cloudflare — DNS records, firewall rules, and SSL c
 - **DNS records** — list, create, edit, and delete records (A, AAAA, CNAME, MX, TXT, and more); toggle proxy mode per record
 - **Firewall / IP Access Rules** — list, add, and delete allow/block/challenge rules
 - **SSL/TLS** — view certificate packs and their status per zone
-- **Activity log** — per-type filtered log of all actions taken in the session
 - Vim-style navigation (`j`/`k`, `h`/`l`, `g`/`G`) throughout
 - First-run token wizard with live validation
 
@@ -124,10 +123,6 @@ cfctl version  # print version
 | `h` | Focus sidebar |
 | `l` / `enter` | Focus content panel |
 | `tab` | Toggle between panels |
-| `1` | Go to DNS section |
-| `2` | Go to Firewall section |
-| `3` | Go to SSL/TLS section |
-| `4` | Go to Logs section |
 | `t` | Open account manager |
 | `q` / `ctrl+c` | Quit |
 
@@ -179,8 +174,7 @@ cfctl/
 │   ├── accountmgr.go # multi-account manager (add/edit/delete/switch)
 │   ├── dns.go        # DNS records view + form
 │   ├── firewall.go
-│   ├── ssl.go
-│   └── logs.go       # activity log view
+│   └── ssl.go
 └── styles/           # lipgloss colour palette and shared styles
 ```
 
