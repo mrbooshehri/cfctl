@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,10 +28,9 @@ const (
 	sectionDNS section = iota
 	sectionFirewall
 	sectionSSL
-	sectionLogs
 )
 
-var sectionNames = []string{"DNS", "Firewall", "SSL/TLS", "Logs"}
+var sectionNames = []string{"DNS", "Firewall", "SSL/TLS"}
 
 type zonesLoadedMsg struct{ zones []cf.Zone }
 type zonesErrMsg struct{ err error }
@@ -52,8 +50,7 @@ type AppModel struct {
 	dns           dnsModel
 	fw            fwModel
 	ssl           sslModel
-	logs          logsModel
-	sectionInit   [4]bool
+	sectionInit   [3]bool
 	err           string
 	width         int
 	height        int
@@ -113,7 +110,7 @@ func (m *AppModel) applySidebarCursor() tea.Cmd {
 	if m.sidebarCursor < n {
 		if m.zoneIdx != m.sidebarCursor {
 			m.zoneIdx = m.sidebarCursor
-			m.sectionInit = [4]bool{}
+			m.sectionInit = [3]bool{}
 			return m.initCurrentSection()
 		}
 	} else {
@@ -156,7 +153,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = config.Save(m.cfg)
 		m.client = msg.client
 		m.state = stateLoadingZones
-		m.sectionInit = [4]bool{}
+		m.sectionInit = [3]bool{}
 		m.zones = nil
 		m.zoneIdx = 0
 		m.sidebarCursor = 0
@@ -186,7 +183,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.client = client
 		m.state = stateLoadingZones
-		m.sectionInit = [4]bool{}
+		m.sectionInit = [3]bool{}
 		m.zones = nil
 		m.zoneIdx = 0
 		m.sidebarCursor = 0
@@ -248,22 +245,6 @@ func (m AppModel) updateMain(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.acctMgr = newAccountMgrModel(m.cfg)
 				return m, nil
 			}
-		case "1":
-			m.sectionIdx = 0
-			m.sidebarCursor = len(m.zones) + 0
-			return m, m.initCurrentSection()
-		case "2":
-			m.sectionIdx = 1
-			m.sidebarCursor = len(m.zones) + 1
-			return m, m.initCurrentSection()
-		case "3":
-			m.sectionIdx = 2
-			m.sidebarCursor = len(m.zones) + 2
-			return m, m.initCurrentSection()
-		case "4":
-			m.sectionIdx = 3
-			m.sidebarCursor = len(m.zones) + 3
-			return m, m.initCurrentSection()
 		case "h":
 			if !m.focusSide && !m.contentHasForm() {
 				m.focusSide = true
@@ -325,16 +306,6 @@ func (m AppModel) currentZoneID() string {
 }
 
 func (m *AppModel) initCurrentSection() tea.Cmd {
-	if section(m.sectionIdx) == sectionLogs {
-		if !m.sectionInit[m.sectionIdx] {
-			m.sectionInit[m.sectionIdx] = true
-			m.logs = newLogsModel(m.log)
-			m.logs.SetSize(m.contentWidth(), m.contentHeight())
-			return m.logs.Init()
-		}
-		return nil
-	}
-
 	zoneID := m.currentZoneID()
 	if zoneID == "" || m.sectionInit[m.sectionIdx] {
 		return nil
@@ -369,10 +340,6 @@ func (m AppModel) updateSection(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var s sslModel
 		s, cmd = m.ssl.Update(msg)
 		m.ssl = s
-	case sectionLogs:
-		var l logsModel
-		l, cmd = m.logs.Update(msg)
-		m.logs = l
 	}
 	return m, cmd
 }
@@ -382,7 +349,6 @@ func (m *AppModel) resizeSections() {
 	ch := m.contentHeight()
 	m.dns.SetSize(cw, ch)
 	m.fw.SetSize(cw, ch)
-	m.logs.SetSize(cw, ch)
 }
 
 func (m AppModel) sidebarWidth() int {
@@ -447,7 +413,7 @@ func (m AppModel) headerView() string {
 			styles.NormalItem.Render(m.cfg.Active)
 	}
 
-	hint := "[h/l] panels  [j/k] navigate  [1-4] sections  [t] accounts  [q] quit"
+	hint := "[h/l] panels  [j/k] navigate  [t] accounts  [q] quit"
 	right := styles.Help.Render(hint)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 0 {
@@ -492,7 +458,7 @@ func (m AppModel) sidebarView() string {
 
 	b.WriteString("\n" + styles.DimItem.Render("SECTIONS") + "\n")
 	for i, name := range sectionNames {
-		renderItem(len(m.zones)+i, fmt.Sprintf("[%d] %s", i+1, name), "▸ ")
+		renderItem(len(m.zones)+i, name, "▸ ")
 	}
 
 	if m.focusSide {
@@ -517,8 +483,6 @@ func (m AppModel) contentView() string {
 		return m.fw.View()
 	case sectionSSL:
 		return m.ssl.View()
-	case sectionLogs:
-		return m.logs.View()
 	}
 	return ""
 }
