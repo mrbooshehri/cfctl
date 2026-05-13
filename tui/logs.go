@@ -94,12 +94,14 @@ func (m *logsModel) rebuildViewport() {
 	m.followCursor()
 }
 
-// followCursor adjusts the viewport's Y offset so the cursor row is visible.
+// followCursor scrolls the viewport so the cursor stays within a scrolloff
+// margin of 3 lines from the top/bottom edge.
 func (m *logsModel) followCursor() {
-	if m.cursor < m.vp.YOffset {
-		m.vp.SetYOffset(m.cursor)
-	} else if m.cursor >= m.vp.YOffset+m.vp.Height {
-		m.vp.SetYOffset(m.cursor - m.vp.Height + 1)
+	const scrolloff = 3
+	if m.cursor > m.vp.YOffset+m.vp.Height-1-scrolloff {
+		m.vp.SetYOffset(m.cursor - (m.vp.Height - 1 - scrolloff))
+	} else if m.cursor < m.vp.YOffset+scrolloff {
+		m.vp.SetYOffset(m.cursor - scrolloff)
 	}
 }
 
