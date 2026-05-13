@@ -97,9 +97,9 @@ func (m *logsModel) rebuildViewport() {
 // followCursor adjusts the viewport's Y offset so the cursor row is visible.
 func (m *logsModel) followCursor() {
 	if m.cursor < m.vp.YOffset {
-		m.vp.YOffset = m.cursor
+		m.vp.SetYOffset(m.cursor)
 	} else if m.cursor >= m.vp.YOffset+m.vp.Height {
-		m.vp.YOffset = m.cursor - m.vp.Height + 1
+		m.vp.SetYOffset(m.cursor - m.vp.Height + 1)
 	}
 }
 
@@ -306,7 +306,9 @@ func (m logsModel) renderRows() string {
 				styles.NormalItem.Width(msgW).Render(msg) + "\n")
 		}
 	}
-	return b.String()
+	// Trim the trailing \n so strings.Split gives exactly N elements
+	// (no empty trailing element), keeping TotalLineCount == len(visible).
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m *logsModel) SetSize(w, h int) {
